@@ -8,11 +8,14 @@ module.exports = {
 
   BROWSER: {
     headless: true,
-    slowMo: 100
+    slowMo: 50
   },
 
+  CONCURRENCY: 3, // 🔥 how many accounts run at same time
+
+
   DELAYS: {
-    betweenAccounts: 5000,
+    betweenAccounts: 2000,
     afterLogin: 3000
   },
 
@@ -30,5 +33,5 @@ module.exports = {
     claimContainer: 'div[class*="claimButtonText"]',
     claimText: 'Claim',
     disabledText: 'span[class*="textDisabled"]'
-  }
+  },
 };
