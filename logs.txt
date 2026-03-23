@@ -1,0 +1,14 @@
+acc1 failed
+acc1 failed
+acc1 success
+acc1 success
+acc1 success
+acc1 success
+acc1 success
+acc1 no-claim
+Welldress Tailor already-claimed
+Welldress Tailor claimed
+Welldress Tailor already-claimed
+Malik Riyan8 claimed
+Welldress Tailor error
+Malik Riyan8 error
