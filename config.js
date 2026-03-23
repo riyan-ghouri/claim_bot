@@ -7,11 +7,11 @@ module.exports = {
   },
 
   BROWSER: {
-    headless: true,
+    headless: false,
     slowMo: 50
   },
 
-  CONCURRENCY: 3, // 🔥 how many accounts run at same time
+  CONCURRENCY: 1, // 🔥 how many accounts run at same time
 
 
   DELAYS: {
