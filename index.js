@@ -3,20 +3,31 @@ const accounts = require("./accounts.json");
 const fs = require("fs");
 const config = require("./config");
 const express = require("express");
+const mongoose = require('mongoose');
+const cloudinary = require('./config/cloudinary');
+const DebugLog = require('./models/DebugLog');
+const dotenv = require('dotenv');
+
+ 
+dotenv.config();
+// Connect MongoDB (add your connection string in Environment Variables on Render)
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('✅ Connected to MongoDB'))
+  .catch(err => console.error('❌ MongoDB connection error:', err));
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 let isRunning = false;
-let logs = [];                    // Store logs to show on page
+let logs = [];
 let lastRunTime = null;
 
 const addLog = (message) => {
   const time = new Date().toLocaleTimeString();
   const entry = `[${time}] ${message}`;
   logs.push(entry);
-  console.log(entry);             // Also print to Render console
-  if (logs.length > 500) logs.shift(); // Keep only last 500 lines
+  console.log(entry);
+  if (logs.length > 1000) logs.shift();
 };
 
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -29,29 +40,21 @@ async function runAllAccounts() {
 
   const browser = await chromium.launch({
     headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--single-process'
-    ]
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
   });
 
   const queue = [...accounts];
   const workers = [];
 
-  for (let i = 0; i < Math.min(config.CONCURRENCY || 2, 3); i++) {   // limit max 3
-    workers.push(
-      (async () => {
-        while (queue.length > 0) {
-          const acc = queue.shift();
-          if (!acc) break;
-          await runAccount(browser, acc);
-          await delay(config.DELAYS.betweenTasks || 3000);
-        }
-      })()
-    );
+  for (let i = 0; i < Math.min(config.CONCURRENCY || 2, 3); i++) {
+    workers.push((async () => {
+      while (queue.length > 0) {
+        const acc = queue.shift();
+        if (!acc) break;
+        await runAccount(browser, acc);
+        await delay(config.DELAYS.betweenTasks || 3000);
+      }
+    })());
   }
 
   await Promise.all(workers);
@@ -75,28 +78,69 @@ async function runAccount(browser, account) {
     addLog(`🚀 Running: ${account.name}`);
 
     const localStorageItems = config.LOCAL_STORAGE_KEYS(account);
-
     await context.addInitScript((items) => {
       items.forEach((item) => localStorage.setItem(item.key, item.value));
     }, localStorageItems);
 
     await page.goto(config.URLS.home, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await page.waitForTimeout(15000);
+    await page.waitForTimeout(20000);
 
     addLog(`✅ Logged in: ${account.name}`);
 
     await page.goto(config.URLS.claim, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await page.waitForTimeout(15000);
+    await page.waitForTimeout(20000);
 
     const claimBtn = page.locator(config.SELECTORS.claimContainer);
 
     if ((await claimBtn.count()) === 0) {
       addLog(`⚠️ UI missing: ${account.name}`);
-      await page.screenshot({ path: `debug-${account.name}.png` });
+
+      // Take screenshot as Buffer (better for Cloudinary)
+      const screenshotBuffer = await page.screenshot({ 
+        timeout: 15000 
+      }).catch(() => null);
+
+      let cloudinaryUrl = null;
+
+      if (screenshotBuffer) {
+        try {
+          // Upload to Cloudinary using stream
+          cloudinaryUrl = await new Promise((resolve, reject) => {
+            const uploadStream = cloudinary.uploader.upload_stream(
+              {
+                folder: "goodwallet/debug",
+                public_id: `${account.name}-${Date.now()}`,
+                resource_type: "image"
+              },
+              (error, result) => {
+                if (error) reject(error);
+                else resolve(result.secure_url);
+              }
+            );
+            require('streamifier').createReadStream(screenshotBuffer).pipe(uploadStream);
+          });
+
+          addLog(`📤 Screenshot uploaded to Cloudinary: ${cloudinaryUrl}`);
+
+          // Save to MongoDB
+          await DebugLog.create({
+            accountName: account.name,
+            errorType: 'ui-missing',
+            screenshotUrl: cloudinaryUrl,
+            message: 'Claim button UI not found',
+            timestamp: new Date()
+          });
+
+        } catch (uploadErr) {
+          addLog(`❌ Cloudinary upload failed: ${uploadErr.message}`);
+        }
+      }
+
       fs.appendFileSync("logs.txt", `${account.name} ui-missing\n`);
       return;
     }
 
+    // Rest of your code (disabled check + claim)...
     const isDisabled = await page.locator(config.SELECTORS.disabledText).isVisible();
 
     if (isDisabled) {
@@ -108,6 +152,7 @@ async function runAccount(browser, account) {
       fs.appendFileSync("logs.txt", `${account.name} claimed\n`);
       await page.waitForTimeout(10000);
     }
+
   } catch (err) {
     addLog(`❌ Error: ${account.name} - ${err.message}`);
     fs.appendFileSync("logs.txt", `${account.name} error\n`);
@@ -130,15 +175,18 @@ app.get("/", (req, res) => {
     <html>
     <head>
       <title>GoodWallet Claim Bot</title>
-      <meta http-equiv="refresh" content="3">
       <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; }
         h1 { color: #333; }
         .status { font-size: 18px; font-weight: bold; }
         button { padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; }
         button:disabled { background: #ccc; cursor: not-allowed; }
-        pre { background: #222; color: #0f0; padding: 15px; border-radius: 8px; max-height: 70vh; overflow-y: auto; white-space: pre-wrap; }
+        pre { 
+          background: #222; color: #0f0; padding: 15px; border-radius: 8px; 
+          max-height: 65vh; overflow-y: auto; white-space: pre-wrap; font-family: monospace;
+        }
         .info { background: white; padding: 15px; border-radius: 8px; margin: 15px 0; }
+        .log-container { position: relative; }
       </style>
     </head>
     <body>
@@ -147,7 +195,7 @@ app.get("/", (req, res) => {
       <div class="info">
         <p class="status">Status: ${status}</p>
         <p>${lastRun}</p>
-        <p>Accounts loaded: ${accounts.length} | Concurrency: ${config.CONCURRENCY || 2}</p>
+        <p>Accounts: ${accounts.length} | Concurrency: ${config.CONCURRENCY || 2}</p>
       </div>
 
       <form action="/run" method="post">
@@ -157,27 +205,57 @@ app.get("/", (req, res) => {
       </form>
 
       <h2>Live Logs:</h2>
-      <pre>${logs.join('\n') || 'No logs yet. Click the button to start.'}</pre>
+      <div class="log-container">
+        <pre id="logs">${logs.join('\n') || 'No logs yet. Click the button to start.'}</pre>
+      </div>
 
-      <p><small>Page refreshes automatically every 3 seconds. Check debug-*.png files if any UI error occurs.</small></p>
+      <p><small>Logs update automatically every 2 seconds • Check debug-*.png if UI is missing</small></p>
+
+      <script>
+        let lastLogCount = ${logs.length};
+
+        async function updateLogs() {
+          try {
+            const res = await fetch('/logs');
+            const data = await res.text();
+            const logPre = document.getElementById('logs');
+            
+            if (data !== logPre.textContent) {
+              logPre.textContent = data;
+              // Auto scroll to bottom
+              logPre.scrollTop = logPre.scrollHeight;
+            }
+          } catch(e) {}
+        }
+
+        // Update logs every 2 seconds
+        setInterval(updateLogs, 2000);
+        
+        // Initial load
+        window.onload = () => {
+          document.getElementById('logs').scrollTop = document.getElementById('logs').scrollHeight;
+        };
+      </script>
     </body>
     </html>
   `);
 });
 
+// New endpoint to get only logs (for live update)
+app.get("/logs", (req, res) => {
+  res.send(logs.join('\n') || 'No logs yet.');
+});
+
 app.post("/run", async (req, res) => {
   if (isRunning) {
-    res.send(`<h2>Bot is already running! Check the live logs below.</h2><a href="/">← Back</a>`);
-    return;
+    return res.send(`<h2>Bot is already running!</h2><a href="/">← Back to Dashboard</a>`);
   }
 
   res.send(`
-    <h2>✅ Claim process started!</h2>
-    <p>You will see live logs on the next page refresh.</p>
-    <a href="/">← Go to Dashboard (Live Logs)</a>
+    <h2>✅ Claim started! Watch the live logs below.</h2>
+    <a href="/">← Go to Dashboard</a>
   `);
 
-  // Run in background
   runAllAccounts().catch(err => {
     addLog(`💥 Fatal Error: ${err.message}`);
     isRunning = false;
@@ -185,5 +263,5 @@ app.post("/run", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ GoodWallet Claim Bot is running on port ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
 });

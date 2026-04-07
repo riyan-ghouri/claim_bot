@@ -5,8 +5,12 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "cloudinary": "^2.9.0",
+    "dotenv": "^17.4.1",
     "express": "^4.22.1",
-    "playwright": "^1.58.2"
+    "mongoose": "^9.4.1",
+    "playwright": "^1.58.2",
+    "streamifier": "^0.1.1"
   },
   "author": {
     "name": "Riyan Ghouri"
