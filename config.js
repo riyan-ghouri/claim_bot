@@ -8,7 +8,7 @@ module.exports = {
 
   BROWSER: { /* we override it in index.js */ },
 
-  CONCURRENCY: 2,        // Change to 1 or 2 (max 3 recommended)
+  CONCURRENCY: 1,        // Change to 1 or 2 (max 3 recommended)
 
   DELAYS: {
     betweenTasks: 3000   // renamed for clarity

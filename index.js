@@ -40,7 +40,16 @@ async function runAllAccounts() {
 
   const browser = await chromium.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    args: [
+      '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--single-process',
+    '--disable-dev-shm-usage', 
+    '--memory-pressure-off'     // added
+  
+        ]
   });
 
   const queue = [...accounts];
