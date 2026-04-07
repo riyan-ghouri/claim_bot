@@ -6,17 +6,12 @@ module.exports = {
     claim: 'https://goodwallet.xyz/en/gooddollar'
   },
 
-  BROWSER: {
-    headless: false,
-    slowMo: 50
-  },
+  BROWSER: { /* we override it in index.js */ },
 
-  CONCURRENCY: 1, // 🔥 how many accounts run at same time
-
+  CONCURRENCY: 2,        // Change to 1 or 2 (max 3 recommended)
 
   DELAYS: {
-    betweenAccounts: 2000,
-    afterLogin: 3000
+    betweenTasks: 3000   // renamed for clarity
   },
 
   LOCAL_STORAGE_KEYS: (account) => [
@@ -31,7 +26,6 @@ module.exports = {
 
   SELECTORS: {
     claimContainer: 'div[class*="claimButtonText"]',
-    claimText: 'Claim',
     disabledText: 'span[class*="textDisabled"]'
-  },
+  }
 };
