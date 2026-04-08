@@ -6,6 +6,7 @@ const DebugLog = require('./models/DebugLog');
 const AccountSession = require('./models/AccountSession');
 const path = require('path');
 const dotenv = require('dotenv');
+const fs = require('fs');
 
 dotenv.config();
 
@@ -36,6 +37,40 @@ const addLog = (message) => {
   if (logs.length > 1000) logs.shift();
 };
 
+// Helper to find the correct Chromium path in Playwright Docker image
+function getChromiumExecutablePath() {
+  try {
+    const baseDir = '/ms-playwright';
+    
+    if (!fs.existsSync(baseDir)) {
+      console.log('❌ /ms-playwright directory not found');
+      return null;
+    }
+
+    const dirs = fs.readdirSync(baseDir).filter(dir => dir.includes('chromium'));
+    
+    if (dirs.length === 0) {
+      console.log('❌ No chromium folder found in /ms-playwright');
+      return null;
+    }
+
+    // Take the first (usually latest) chromium folder
+    const chromiumDir = dirs[0];
+    const fullPath = `${baseDir}/${chromiumDir}/chrome-linux64/chrome`;
+
+    if (fs.existsSync(fullPath)) {
+      console.log(`✅ Chromium binary found at: ${fullPath}`);
+      return fullPath;
+    } else {
+      console.log(`⚠️ Binary not found at: ${fullPath}`);
+      return null;
+    }
+  } catch (err) {
+    console.log(`❌ Error locating Chromium: ${err.message}`);
+    return null;
+  }
+}
+
 // ====================== UPLOAD HELPER ======================
 async function uploadScreenshotAndLog(account, buffer, type, message) {
   if (!buffer) return;
@@ -64,7 +99,7 @@ async function uploadScreenshotAndLog(account, buffer, type, message) {
   }
 }
 
-// ====================== MAIN FUNCTION (Puppeteer) ======================
+// ====================== MAIN FUNCTION ======================
 async function runAccountByIndex(index) {
   if (isRunning) return;
 
@@ -92,10 +127,16 @@ async function runAccountByIndex(index) {
       return;
     }
 
-        // === WORKING PUPPETEER LAUNCH FOR RENDER + PLAYWRIGHT IMAGE ===
+    // Find correct Chromium path
+    const executablePath = getChromiumExecutablePath();
+    if (!executablePath) {
+      throw new Error('Chromium binary not found in the Docker image');
+    }
+
+    // Launch browser with correct path
     browser = await puppeteer.launch({
       headless: true,
-      executablePath: '/ms-playwright/chromium-*/chrome-linux64/chrome',   // This finds the exact binary
+      executablePath: executablePath,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -103,9 +144,11 @@ async function runAccountByIndex(index) {
         '--disable-gpu',
         '--disable-web-security',
         '--memory-pressure-off',
-        '--single-process'   // helps with memory on Render
+        '--single-process',
+        '--no-zygote'
       ],
-      timeout: 60000
+      timeout: 60000,
+      dumpio: true
     });
 
     const page = await browser.newPage();
