@@ -37,7 +37,10 @@ const addLog = (message) => {
   if (logs.length > 1000) logs.shift();
 };
 
-// ====================== ROBUST CHROMIUM PATH FINDER ======================
+// Sleep function to replace removed page.waitForTimeout()
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ====================== CHROMIUM PATH FINDER ======================
 function getChromiumExecutablePath() {
   try {
     const baseDir = '/ms-playwright';
@@ -48,9 +51,8 @@ function getChromiumExecutablePath() {
     }
 
     const items = fs.readdirSync(baseDir);
-    console.log('📂 Folders found in /ms-playwright:', items);
+    console.log('📂 Folders in /ms-playwright:', items);
 
-    // Find chromium folder (e.g. chromium-1217)
     const chromiumDir = items.find(dir => dir.includes('chromium') && !dir.includes('headless'));
     
     if (!chromiumDir) {
@@ -58,18 +60,17 @@ function getChromiumExecutablePath() {
       return null;
     }
 
-    // Correct path structure used by recent Playwright
     const fullPath = `${baseDir}/${chromiumDir}/chrome-linux64/chrome`;
 
     if (fs.existsSync(fullPath)) {
-      console.log(`✅ Chromium binary found successfully at: ${fullPath}`);
+      console.log(`✅ Chromium binary found at: ${fullPath}`);
       return fullPath;
     } else {
-      console.log(`⚠️ Binary not found at expected path: ${fullPath}`);
+      console.log(`⚠️ Binary not found at: ${fullPath}`);
       return null;
     }
   } catch (err) {
-    console.log(`❌ Error locating Chromium path: ${err.message}`);
+    console.log(`❌ Error locating Chromium: ${err.message}`);
     return null;
   }
 }
@@ -130,10 +131,9 @@ async function runAccountByIndex(index) {
       return;
     }
 
-    // Get Chromium path
     const executablePath = getChromiumExecutablePath();
     if (!executablePath) {
-      throw new Error('Chromium binary not found in Docker image');
+      throw new Error('Chromium binary not found in the Docker image');
     }
 
     browser = await puppeteer.launch({
@@ -144,8 +144,6 @@ async function runAccountByIndex(index) {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--disable-web-security',
-        '--memory-pressure-off',
         '--single-process',
         '--no-zygote'
       ],
@@ -167,10 +165,10 @@ async function runAccountByIndex(index) {
     }, account.sessionData);
 
     await page.goto('https://goodwallet.xyz/en', { waitUntil: 'domcontentloaded', timeout: 35000 });
-    await page.waitForTimeout(5000);
+    await sleep(5000);                    // ← Fixed
 
     await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: 'domcontentloaded', timeout: 35000 });
-    await page.waitForTimeout(8000);
+    await sleep(8000);                    // ← Fixed
 
     const initialBuffer = await page.screenshot({ encoding: 'binary' }).catch(() => null);
     if (initialBuffer) await uploadScreenshotAndLog(account, initialBuffer, 'initial-load', 'Initial page state');
@@ -207,7 +205,7 @@ async function runAccountByIndex(index) {
         });
 
         addLog(`💰 Claim button clicked for ${account.name}`);
-        await page.waitForTimeout(7000);
+        await sleep(7000);                // ← Fixed
 
         const after = await page.screenshot({ encoding: 'binary' }).catch(() => null);
         if (after) await uploadScreenshotAndLog(account, after, 'after-claim', 'After click');
