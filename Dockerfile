@@ -4,14 +4,17 @@ WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm ci --only=production
+# Install all dependencies (puppeteer needs to be installed)
+RUN npm ci
 
-# Stronger fix for browser installation
+# Use pre-installed Chromium from Playwright image
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN mkdir -p /ms-playwright && \
-    chmod -R 777 /ms-playwright && \
-    npx playwright install --with-deps chromium
+    chmod -R 777 /ms-playwright
 
+# Copy your code
 COPY . .
+
+EXPOSE 3000
 
 CMD ["npm", "start"]

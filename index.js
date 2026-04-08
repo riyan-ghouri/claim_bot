@@ -1,4 +1,4 @@
-const { chromium } = require("playwright");
+const puppeteer = require('puppeteer');
 const express = require("express");
 const mongoose = require('mongoose');
 const cloudinary = require('./config/cloudinary');
@@ -9,23 +9,15 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-// Force Cloudinary config
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-console.log("Cloudinary Config Check:", {
-  cloud_name: !!process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: !!process.env.CLOUDINARY_API_KEY,
-  api_secret: !!process.env.CLOUDINARY_API_SECRET
-});
-
-// Connect MongoDB
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('✅ Connected to MongoDB'))
-  .catch(err => console.error('❌ MongoDB connection error:', err));
+  .catch(err => console.error('❌ MongoDB error:', err));
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -44,24 +36,18 @@ const addLog = (message) => {
   if (logs.length > 1000) logs.shift();
 };
 
-// ====================== HELPER ======================
-async function uploadScreenshotAndLog(account, screenshotBuffer, type, message) {
-  if (!screenshotBuffer) return;
-
+// ====================== UPLOAD HELPER ======================
+async function uploadScreenshotAndLog(account, buffer, type, message) {
+  if (!buffer) return;
   try {
     const cloudinaryUrl = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: "goodwallet/debug",
-          public_id: `${account.name.replace(/\s+/g, '-')}-${type}-${Date.now()}`,
-          resource_type: "image"
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result.secure_url);
-        }
-      );
-      require('streamifier').createReadStream(screenshotBuffer).pipe(uploadStream);
+      const uploadStream = cloudinary.uploader.upload_stream({
+        folder: "goodwallet/debug",
+        public_id: `${account.name.replace(/\s+/g, '-')}-${type}-${Date.now()}`,
+        resource_type: "image"
+      }, (error, result) => error ? reject(error) : resolve(result.secure_url));
+
+      require('streamifier').createReadStream(buffer).pipe(uploadStream);
     });
 
     addLog(`📤 ${type} screenshot uploaded for ${account.name}`);
@@ -73,59 +59,62 @@ async function uploadScreenshotAndLog(account, screenshotBuffer, type, message) 
       message: message,
       timestamp: new Date()
     });
-
-  } catch (uploadErr) {
-    addLog(`❌ Failed to upload ${type} screenshot: ${uploadErr.message}`);
+  } catch (e) {
+    addLog(`❌ Upload failed for ${type}: ${e.message}`);
   }
 }
 
-// ====================== MAIN FUNCTION (Render Optimized) ======================
+// ====================== MAIN FUNCTION (Puppeteer) ======================
 async function runAccountByIndex(index) {
-  if (isRunning) {
-    addLog(`⚠️ Bot is already running.`);
-    return;
-  }
+  if (isRunning) return;
 
   isRunning = true;
   logs = [];
   addLog(`🚀 Starting claim for account index: ${index}`);
 
-  let browser, context;
+  let browser;
 
   try {
     let account = await AccountSession.findOne({ index: Number(index) });
     if (!account) {
-      addLog(`❌ Account index ${index} not found`);
+      addLog(`❌ Account ${index} not found`);
       return;
     }
 
-    // Reset error status automatically
     if (account.status === 'error') {
       addLog(`🔄 Resetting error status for ${account.name}`);
-      await AccountSession.findOneAndUpdate(
-        { index: Number(index) },
-        { status: 'active', lastError: null }
-      );
+      await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'active', lastError: null });
       account = await AccountSession.findOne({ index: Number(index) });
     }
 
     if (account.status !== 'active') {
-      addLog(`⛔ Account ${index} is ${account.status} - skipping`);
+      addLog(`⛔ Skipping ${account.name} - status: ${account.status}`);
       return;
     }
 
-    browser = await chromium.launch({
+        // === WORKING PUPPETEER LAUNCH FOR RENDER + PLAYWRIGHT IMAGE ===
+    browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--memory-pressure-off']
+      executablePath: '/ms-playwright/chromium-*/chrome-linux64/chrome',   // This finds the exact binary
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-web-security',
+        '--memory-pressure-off',
+        '--single-process'   // helps with memory on Render
+      ],
+      timeout: 60000
     });
 
-    context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const page = await context.newPage();
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 720 });
 
-    addLog(`🚀 Running: ${account.name} (Index ${index})`);
+    addLog(`🚀 Running: ${account.name}`);
 
     // Session injection
-    await context.addInitScript((sessionJson) => {
+    await page.evaluateOnNewDocument((sessionJson) => {
       localStorage.clear();
       localStorage.setItem('SIGNER_SESSION', sessionJson);
       localStorage.setItem('Tracking_Sentry', 'allowed');
@@ -133,64 +122,51 @@ async function runAccountByIndex(index) {
       localStorage.setItem('defaultLoginMethod', 'google');
     }, account.sessionData);
 
-    // === FAST & STABLE NAVIGATION FOR RENDER ===
-    await page.goto('https://goodwallet.xyz/en', { 
-      waitUntil: "domcontentloaded", 
-      timeout: 40000 
-    });
-    await page.waitForTimeout(6000);
+    await page.goto('https://goodwallet.xyz/en', { waitUntil: 'domcontentloaded', timeout: 35000 });
+    await page.waitForTimeout(5000);
 
-    await page.goto('https://goodwallet.xyz/en/gooddollar', { 
-      waitUntil: "domcontentloaded", 
-      timeout: 40000 
-    });
-    await page.waitForTimeout(9000);   // Reduced
+    await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: 'domcontentloaded', timeout: 35000 });
+    await page.waitForTimeout(8000);
 
-    // Initial screenshot
-    const initialBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
-    if (initialBuffer) {
-      await uploadScreenshotAndLog(account, initialBuffer, 'initial-load', 'Initial page state');
-    }
+    const initialBuffer = await page.screenshot({ encoding: 'binary' }).catch(() => null);
+    if (initialBuffer) await uploadScreenshotAndLog(account, initialBuffer, 'initial-load', 'Initial page state');
 
-    // Check cooldown screen
-    const cooldownText = await page.locator('text=Just a little longer').isVisible({ timeout: 4000 }).catch(() => false);
+    const cooldown = await page.evaluate(() => document.body.innerText.includes("Just a little longer"));
 
-    if (cooldownText) {
+    if (cooldown) {
       addLog(`⏳ Cooldown detected for ${account.name}`);
-      const cooldownBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
-      if (cooldownBuffer) await uploadScreenshotAndLog(account, cooldownBuffer, 'cooldown', 'Coming soon screen');
+      const buf = await page.screenshot({ encoding: 'binary' }).catch(() => null);
+      if (buf) await uploadScreenshotAndLog(account, buf, 'cooldown', 'Coming soon screen');
       await AccountSession.findOneAndUpdate({ index: Number(index) }, { lastClaimed: new Date() });
       return;
     }
 
-    // Check claim button
-    const claimBtn = page.locator('div[class*="claimButtonText"]');
-    const btnCount = await claimBtn.count();
+    const btnExists = await page.evaluate(() => document.querySelectorAll('div[class*="claimButtonText"]').length > 0);
 
-    if (btnCount === 0) {
+    if (!btnExists) {
       addLog(`⚠️ UI missing for ${account.name}`);
-      const missingBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
-      if (missingBuffer) await uploadScreenshotAndLog(account, missingBuffer, 'ui-missing', 'Claim button not found');
+      const buf = await page.screenshot({ encoding: 'binary' }).catch(() => null);
+      if (buf) await uploadScreenshotAndLog(account, buf, 'ui-missing', 'Claim button not found');
       await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: 'UI missing' });
-    } 
-    else {
-      const isDisabled = await page.locator('span[class*="textDisabled"]').isVisible({ timeout: 4000 }).catch(() => false);
+    } else {
+      const isDisabled = await page.evaluate(() => !!document.querySelector('span[class*="textDisabled"]'));
 
       if (isDisabled) {
         addLog(`⛔ Already claimed: ${account.name}`);
       } else {
-        // BEFORE
-        const beforeBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
-        if (beforeBuffer) await uploadScreenshotAndLog(account, beforeBuffer, 'before-claim', 'Before click');
+        const before = await page.screenshot({ encoding: 'binary' }).catch(() => null);
+        if (before) await uploadScreenshotAndLog(account, before, 'before-claim', 'Before click');
 
-        await claimBtn.click();
+        await page.evaluate(() => {
+          const btn = document.querySelector('div[class*="claimButtonText"]');
+          if (btn) btn.click();
+        });
+
         addLog(`💰 Claim button clicked for ${account.name}`);
-
         await page.waitForTimeout(7000);
 
-        // AFTER
-        const afterBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
-        if (afterBuffer) await uploadScreenshotAndLog(account, afterBuffer, 'after-claim', 'After click');
+        const after = await page.screenshot({ encoding: 'binary' }).catch(() => null);
+        if (after) await uploadScreenshotAndLog(account, after, 'after-claim', 'After click');
 
         addLog(`✅ Claim completed for ${account.name}`);
         await AccountSession.findOneAndUpdate({ index: Number(index) }, { lastClaimed: new Date() });
@@ -201,11 +177,9 @@ async function runAccountByIndex(index) {
     addLog(`❌ Error on index ${index}: ${err.message}`);
     await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: err.message });
   } finally {
-    if (context) await context.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
-    
-    lastRunTime = new Date();
     isRunning = false;
+    lastRunTime = new Date();
     addLog(`🏁 Finished processing account index ${index}`);
   }
 }
@@ -235,32 +209,7 @@ app.post("/run", async (req, res) => {
   if (isRunning) return res.send(`<h2>❌ Bot is running!</h2><a href="/">← Back</a>`);
 
   res.send(`<h2>✅ Started index ${index}</h2><a href="/">← Back to Dashboard</a>`);
-
-  runAccountByIndex(index).catch(err => {
-    console.error(err);
-    addLog(`💥 Fatal: ${err.message}`);
-    isRunning = false;
-  });
-});
-
-app.delete("/delete-image/:id", async (req, res) => {
-  try {
-    const log = await DebugLog.findById(req.params.id);
-    if (!log) return res.status(404).send("Not found");
-
-    if (log.screenshotUrl) {
-      try {
-        const filename = log.screenshotUrl.split('/').pop();
-        const publicId = `goodwallet/debug/${filename.split('.')[0]}`;
-        await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
-      } catch (e) {}
-    }
-
-    await DebugLog.findByIdAndDelete(req.params.id);
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).send("Error");
-  }
+  runAccountByIndex(index);
 });
 
 app.listen(PORT, () => {
