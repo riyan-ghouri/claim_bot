@@ -103,7 +103,7 @@ async function uploadScreenshotAndLog(account, buffer, type, message) {
   }
 }
 
-// ====================== MAIN FUNCTION ======================
+// ====================== MAIN FUNCTION (Improved with longer waits) ======================
 async function runAccountByIndex(index) {
   if (isRunning) return;
 
@@ -147,8 +147,8 @@ async function runAccountByIndex(index) {
         '--single-process',
         '--no-zygote'
       ],
-      timeout: 60000,
-      dumpio: true
+      timeout: 90000,
+      dumpio: false   // Changed to false to reduce noise
     });
 
     const page = await browser.newPage();
@@ -156,6 +156,7 @@ async function runAccountByIndex(index) {
 
     addLog(`🚀 Running: ${account.name}`);
 
+    // Inject session
     await page.evaluateOnNewDocument((sessionJson) => {
       localStorage.clear();
       localStorage.setItem('SIGNER_SESSION', sessionJson);
@@ -164,32 +165,44 @@ async function runAccountByIndex(index) {
       localStorage.setItem('defaultLoginMethod', 'google');
     }, account.sessionData);
 
-    await page.goto('https://goodwallet.xyz/en', { waitUntil: 'domcontentloaded', timeout: 35000 });
-    await sleep(5000);                    // ← Fixed
+    // === Increased wait times ===
+    await page.goto('https://goodwallet.xyz/en', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await sleep(8000);
 
-    await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: 'domcontentloaded', timeout: 35000 });
-    await sleep(8000);                    // ← Fixed
+    await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: 'networkidle2', timeout: 60000 });
+    await sleep(15000);   // ← Increased significantly (was 8000)
 
+    // Take initial screenshot
     const initialBuffer = await page.screenshot({ encoding: 'binary' }).catch(() => null);
     if (initialBuffer) await uploadScreenshotAndLog(account, initialBuffer, 'initial-load', 'Initial page state');
 
-    const cooldown = await page.evaluate(() => document.body.innerText.includes("Just a little longer"));
+    // Check for cooldown
+    const cooldown = await page.evaluate(() => document.body.innerText.includes("Just a little longer") || 
+                                             document.body.innerText.includes("Coming soon"));
 
     if (cooldown) {
       addLog(`⏳ Cooldown detected for ${account.name}`);
       const buf = await page.screenshot({ encoding: 'binary' }).catch(() => null);
-      if (buf) await uploadScreenshotAndLog(account, buf, 'cooldown', 'Coming soon screen');
+      if (buf) await uploadScreenshotAndLog(account, buf, 'cooldown', 'Cooldown screen');
       await AccountSession.findOneAndUpdate({ index: Number(index) }, { lastClaimed: new Date() });
       return;
     }
 
-    const btnExists = await page.evaluate(() => document.querySelectorAll('div[class*="claimButtonText"]').length > 0);
+    // Wait longer for UI to fully load (spinner → button)
+    addLog(`⏳ Waiting extra time for claim button to appear...`);
+    await sleep(12000);   // Extra wait
+
+    // Check if claim button exists
+    const btnExists = await page.evaluate(() => {
+      return document.querySelectorAll('div[class*="claimButtonText"]').length > 0 ||
+             document.querySelectorAll('button').length > 0;   // fallback
+    });
 
     if (!btnExists) {
-      addLog(`⚠️ UI missing for ${account.name}`);
+      addLog(`⚠️ UI missing for ${account.name} - still loading or changed UI`);
       const buf = await page.screenshot({ encoding: 'binary' }).catch(() => null);
-      if (buf) await uploadScreenshotAndLog(account, buf, 'ui-missing', 'Claim button not found');
-      await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: 'UI missing' });
+      if (buf) await uploadScreenshotAndLog(account, buf, 'ui-missing', 'Claim button not found after long wait');
+      await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: 'UI missing after extended wait' });
     } else {
       const isDisabled = await page.evaluate(() => !!document.querySelector('span[class*="textDisabled"]'));
 
@@ -200,12 +213,13 @@ async function runAccountByIndex(index) {
         if (before) await uploadScreenshotAndLog(account, before, 'before-claim', 'Before click');
 
         await page.evaluate(() => {
-          const btn = document.querySelector('div[class*="claimButtonText"]');
+          const btn = document.querySelector('div[class*="claimButtonText"]') || 
+                      document.querySelector('button');
           if (btn) btn.click();
         });
 
         addLog(`💰 Claim button clicked for ${account.name}`);
-        await sleep(7000);                // ← Fixed
+        await sleep(10000);   // Increased after click
 
         const after = await page.screenshot({ encoding: 'binary' }).catch(() => null);
         if (after) await uploadScreenshotAndLog(account, after, 'after-claim', 'After click');
