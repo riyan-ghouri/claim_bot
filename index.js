@@ -9,7 +9,7 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-// Force re-configure Cloudinary after dotenv (important fix for Render)
+// Force Cloudinary config
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -46,7 +46,10 @@ const addLog = (message) => {
 
 // ====================== HELPER: Upload Screenshot ======================
 async function uploadScreenshotAndLog(account, screenshotBuffer, type, message) {
-  if (!screenshotBuffer) return;
+  if (!screenshotBuffer) {
+    addLog(`⚠️ Screenshot buffer empty for ${type}`);
+    return;
+  }
 
   try {
     const cloudinaryUrl = await new Promise((resolve, reject) => {
@@ -76,11 +79,11 @@ async function uploadScreenshotAndLog(account, screenshotBuffer, type, message) 
 
   } catch (uploadErr) {
     addLog(`❌ Failed to upload ${type} screenshot: ${uploadErr.message}`);
-    console.error("Cloudinary Upload Error Details:", uploadErr);
+    console.error(`Cloudinary Upload Error (${type}):`, uploadErr);
   }
 }
 
-// ====================== RUN SINGLE ACCOUNT BY INDEX ======================
+// ====================== RUN SINGLE ACCOUNT BY INDEX (Optimized) ======================
 async function runAccountByIndex(index) {
   if (isRunning) {
     addLog(`⚠️ Bot is already running. Request for index ${index} ignored.`);
@@ -123,6 +126,7 @@ async function runAccountByIndex(index) {
 
     addLog(`🚀 Running: ${account.name} (Index ${index})`);
 
+    // Inject session
     await context.addInitScript((sessionJson) => {
       localStorage.setItem('SIGNER_SESSION', sessionJson);
       localStorage.setItem('Tracking_Sentry', 'allowed');
@@ -130,24 +134,44 @@ async function runAccountByIndex(index) {
       localStorage.setItem('defaultLoginMethod', 'google');
     }, account.sessionData);
 
-    await page.goto('https://goodwallet.xyz/en', { waitUntil: "domcontentloaded", timeout: 60000 });
-    await page.waitForTimeout(20000);
+    // Faster navigation with better waiting
+    await page.goto('https://goodwallet.xyz/en', { 
+      waitUntil: "domcontentloaded", 
+      timeout: 45000 
+    });
+    await page.waitForTimeout(8000);   // Reduced from 15s
 
-    await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: "domcontentloaded", timeout: 60000 });
-    await page.waitForTimeout(20000);
+    await page.goto('https://goodwallet.xyz/en/gooddollar', { 
+      waitUntil: "domcontentloaded", 
+      timeout: 45000 
+    });
+    await page.waitForTimeout(8000);   // Reduced from 15s
 
     const claimBtn = page.locator('div[class*="claimButtonText"]');
 
-    if ((await claimBtn.count()) === 0) {
+    // Check if claim button exists
+    const btnCount = await claimBtn.count();
+
+    if (btnCount === 0) {
       addLog(`⚠️ UI missing for ${account.name}`);
-      const screenshotBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
+
+      // Take screenshot immediately when UI is missing
+      let screenshotBuffer = null;
+      try {
+        screenshotBuffer = await page.screenshot({ timeout: 15000 });
+        addLog(`📸 Took UI missing screenshot for ${account.name}`);
+      } catch (shotErr) {
+        addLog(`❌ Screenshot capture failed: ${shotErr.message}`);
+      }
+
       if (screenshotBuffer) {
         await uploadScreenshotAndLog(account, screenshotBuffer, 'ui-missing', 'Claim button UI not found');
       }
+
       await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: 'UI missing' });
     } 
     else {
-      const isDisabled = await page.locator('span[class*="textDisabled"]').isVisible();
+      const isDisabled = await page.locator('span[class*="textDisabled"]').isVisible({ timeout: 5000 }).catch(() => false);
 
       if (isDisabled) {
         addLog(`⛔ Already claimed: ${account.name}`);
@@ -157,10 +181,11 @@ async function runAccountByIndex(index) {
         const beforeBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
         if (beforeBuffer) await uploadScreenshotAndLog(account, beforeBuffer, 'before-claim', 'Page before clicking claim');
 
+        // Click claim
         await claimBtn.click();
         addLog(`💰 Claim button clicked for ${account.name}`);
 
-        await page.waitForTimeout(10000);
+        await page.waitForTimeout(8000);   // Reduced wait time
 
         // AFTER screenshot
         addLog(`📸 Taking AFTER screenshot for ${account.name}`);
@@ -194,11 +219,7 @@ app.get("/logs", (req, res) => res.send(logs.join('\n') || 'No logs yet.'));
 
 app.get("/status", async (req, res) => {
   const totalAccounts = await AccountSession.countDocuments().catch(() => 0);
-  res.json({
-    isRunning,
-    lastRunTime,
-    totalAccounts
-  });
+  res.json({ isRunning, lastRunTime, totalAccounts });
 });
 
 app.get("/gallery", async (req, res) => {

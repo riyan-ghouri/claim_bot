@@ -1,31 +1,26 @@
 const fs = require('fs');
 
 module.exports = {
+  // URLs
   URLS: {
     home: 'https://goodwallet.xyz/en',
     claim: 'https://goodwallet.xyz/en/gooddollar'
   },
 
-  BROWSER: { /* we override it in index.js */ },
-
-  CONCURRENCY: 1,        // Change to 1 or 2 (max 3 recommended)
-
-  DELAYS: {
-    betweenTasks: 3000   // renamed for clarity
+  // Selectors
+  SELECTORS: {
+    claimContainer: 'div[class*="claimButtonText"]',   // Main claim button
+    disabledText: 'span[class*="textDisabled"]'       // "Already claimed" text
   },
 
-  LOCAL_STORAGE_KEYS: (account) => [
-    {
-      key: 'SIGNER_SESSION',
-      value: fs.readFileSync(account.session, 'utf-8')
-    },
-    { key: 'Tracking_Sentry', value: 'allowed' },
-    { key: 'Tracking_Amplitude', value: 'allowed' },
-    { key: 'defaultLoginMethod', value: 'google' }
-  ],
+  // Timing settings (you can adjust these)
+  TIMING: {
+    pageLoadTimeout: 45000,      // 45 seconds
+    initialWait: 8000,           // Wait after page load
+    afterClickWait: 8000,        // Wait after clicking claim button
+    screenshotTimeout: 20000
+  },
 
-  SELECTORS: {
-    claimContainer: 'div[class*="claimButtonText"]',
-    disabledText: 'span[class*="textDisabled"]'
-  }
+  // Note: LOCAL_STORAGE_KEYS is no longer needed here
+  // because we are injecting session directly from MongoDB in index.js
 };
