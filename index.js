@@ -79,7 +79,7 @@ async function uploadScreenshotAndLog(account, screenshotBuffer, type, message) 
   }
 }
 
-// ====================== MAIN FUNCTION ======================
+// ====================== MAIN FUNCTION (Render Optimized) ======================
 async function runAccountByIndex(index) {
   if (isRunning) {
     addLog(`⚠️ Bot is already running.`);
@@ -99,9 +99,9 @@ async function runAccountByIndex(index) {
       return;
     }
 
-    // === RESET ERROR STATUS AUTOMATICALLY ===
+    // Reset error status automatically
     if (account.status === 'error') {
-      addLog(`🔄 Resetting error status for ${account.name} to active`);
+      addLog(`🔄 Resetting error status for ${account.name}`);
       await AccountSession.findOneAndUpdate(
         { index: Number(index) },
         { status: 'active', lastError: null }
@@ -110,7 +110,7 @@ async function runAccountByIndex(index) {
     }
 
     if (account.status !== 'active') {
-      addLog(`⛔ Account ${index} (${account.name}) is ${account.status} - skipping`);
+      addLog(`⛔ Account ${index} is ${account.status} - skipping`);
       return;
     }
 
@@ -124,7 +124,7 @@ async function runAccountByIndex(index) {
 
     addLog(`🚀 Running: ${account.name} (Index ${index})`);
 
-    // Strong session injection
+    // Session injection
     await context.addInitScript((sessionJson) => {
       localStorage.clear();
       localStorage.setItem('SIGNER_SESSION', sessionJson);
@@ -133,27 +133,32 @@ async function runAccountByIndex(index) {
       localStorage.setItem('defaultLoginMethod', 'google');
     }, account.sessionData);
 
-    await page.goto('https://goodwallet.xyz/en', { waitUntil: "networkidle", timeout: 60000 });
-    await page.waitForTimeout(8000);
+    // === FAST & STABLE NAVIGATION FOR RENDER ===
+    await page.goto('https://goodwallet.xyz/en', { 
+      waitUntil: "domcontentloaded", 
+      timeout: 40000 
+    });
+    await page.waitForTimeout(6000);
 
-    await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: "networkidle", timeout: 60000 });
-    await page.waitForTimeout(10000);
+    await page.goto('https://goodwallet.xyz/en/gooddollar', { 
+      waitUntil: "domcontentloaded", 
+      timeout: 40000 
+    });
+    await page.waitForTimeout(9000);   // Reduced
 
-    // Initial screenshot for debugging
-    const initialBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
+    // Initial screenshot
+    const initialBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
     if (initialBuffer) {
       await uploadScreenshotAndLog(account, initialBuffer, 'initial-load', 'Initial page state');
     }
 
-    // Check for cooldown screen
-    const cooldownText = await page.locator('text=Just a little longer').isVisible({ timeout: 5000 }).catch(() => false);
+    // Check cooldown screen
+    const cooldownText = await page.locator('text=Just a little longer').isVisible({ timeout: 4000 }).catch(() => false);
 
     if (cooldownText) {
       addLog(`⏳ Cooldown detected for ${account.name}`);
-      const cooldownBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
-      if (cooldownBuffer) {
-        await uploadScreenshotAndLog(account, cooldownBuffer, 'cooldown', 'Just a little longer screen');
-      }
+      const cooldownBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
+      if (cooldownBuffer) await uploadScreenshotAndLog(account, cooldownBuffer, 'cooldown', 'Coming soon screen');
       await AccountSession.findOneAndUpdate({ index: Number(index) }, { lastClaimed: new Date() });
       return;
     }
@@ -164,29 +169,27 @@ async function runAccountByIndex(index) {
 
     if (btnCount === 0) {
       addLog(`⚠️ UI missing for ${account.name}`);
-      const missingBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
-      if (missingBuffer) {
-        await uploadScreenshotAndLog(account, missingBuffer, 'ui-missing', 'Claim button not found');
-      }
+      const missingBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
+      if (missingBuffer) await uploadScreenshotAndLog(account, missingBuffer, 'ui-missing', 'Claim button not found');
       await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: 'UI missing' });
     } 
     else {
-      const isDisabled = await page.locator('span[class*="textDisabled"]').isVisible({ timeout: 5000 }).catch(() => false);
+      const isDisabled = await page.locator('span[class*="textDisabled"]').isVisible({ timeout: 4000 }).catch(() => false);
 
       if (isDisabled) {
         addLog(`⛔ Already claimed: ${account.name}`);
       } else {
-        // BEFORE screenshot
-        const beforeBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
+        // BEFORE
+        const beforeBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
         if (beforeBuffer) await uploadScreenshotAndLog(account, beforeBuffer, 'before-claim', 'Before click');
 
         await claimBtn.click();
         addLog(`💰 Claim button clicked for ${account.name}`);
 
-        await page.waitForTimeout(8000);
+        await page.waitForTimeout(7000);
 
-        // AFTER screenshot
-        const afterBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
+        // AFTER
+        const afterBuffer = await page.screenshot({ timeout: 12000 }).catch(() => null);
         if (afterBuffer) await uploadScreenshotAndLog(account, afterBuffer, 'after-claim', 'After click');
 
         addLog(`✅ Claim completed for ${account.name}`);
