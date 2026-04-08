@@ -37,7 +37,7 @@ const addLog = (message) => {
   if (logs.length > 1000) logs.shift();
 };
 
-// Helper to find the correct Chromium path in Playwright Docker image
+// ====================== ROBUST CHROMIUM PATH FINDER ======================
 function getChromiumExecutablePath() {
   try {
     const baseDir = '/ms-playwright';
@@ -47,26 +47,29 @@ function getChromiumExecutablePath() {
       return null;
     }
 
-    const dirs = fs.readdirSync(baseDir).filter(dir => dir.includes('chromium'));
+    const items = fs.readdirSync(baseDir);
+    console.log('📂 Folders found in /ms-playwright:', items);
+
+    // Find chromium folder (e.g. chromium-1217)
+    const chromiumDir = items.find(dir => dir.includes('chromium') && !dir.includes('headless'));
     
-    if (dirs.length === 0) {
-      console.log('❌ No chromium folder found in /ms-playwright');
+    if (!chromiumDir) {
+      console.log('❌ No chromium folder found');
       return null;
     }
 
-    // Take the first (usually latest) chromium folder
-    const chromiumDir = dirs[0];
+    // Correct path structure used by recent Playwright
     const fullPath = `${baseDir}/${chromiumDir}/chrome-linux64/chrome`;
 
     if (fs.existsSync(fullPath)) {
-      console.log(`✅ Chromium binary found at: ${fullPath}`);
+      console.log(`✅ Chromium binary found successfully at: ${fullPath}`);
       return fullPath;
     } else {
-      console.log(`⚠️ Binary not found at: ${fullPath}`);
+      console.log(`⚠️ Binary not found at expected path: ${fullPath}`);
       return null;
     }
   } catch (err) {
-    console.log(`❌ Error locating Chromium: ${err.message}`);
+    console.log(`❌ Error locating Chromium path: ${err.message}`);
     return null;
   }
 }
@@ -127,13 +130,12 @@ async function runAccountByIndex(index) {
       return;
     }
 
-    // Find correct Chromium path
+    // Get Chromium path
     const executablePath = getChromiumExecutablePath();
     if (!executablePath) {
-      throw new Error('Chromium binary not found in the Docker image');
+      throw new Error('Chromium binary not found in Docker image');
     }
 
-    // Launch browser with correct path
     browser = await puppeteer.launch({
       headless: true,
       executablePath: executablePath,
@@ -156,7 +158,6 @@ async function runAccountByIndex(index) {
 
     addLog(`🚀 Running: ${account.name}`);
 
-    // Session injection
     await page.evaluateOnNewDocument((sessionJson) => {
       localStorage.clear();
       localStorage.setItem('SIGNER_SESSION', sessionJson);
