@@ -81,7 +81,10 @@ async function uploadScreenshotAndLog(account, screenshotBuffer, type, message) 
 
 // ====================== MAIN FUNCTION ======================
 async function runAccountByIndex(index) {
-  if (isRunning) return;
+  if (isRunning) {
+    addLog(`⚠️ Bot is already running.`);
+    return;
+  }
 
   isRunning = true;
   logs = [];
@@ -90,14 +93,24 @@ async function runAccountByIndex(index) {
   let browser, context;
 
   try {
-    const account = await AccountSession.findOne({ index: Number(index) });
+    let account = await AccountSession.findOne({ index: Number(index) });
     if (!account) {
       addLog(`❌ Account index ${index} not found`);
       return;
     }
 
+    // === RESET ERROR STATUS AUTOMATICALLY ===
+    if (account.status === 'error') {
+      addLog(`🔄 Resetting error status for ${account.name} to active`);
+      await AccountSession.findOneAndUpdate(
+        { index: Number(index) },
+        { status: 'active', lastError: null }
+      );
+      account = await AccountSession.findOne({ index: Number(index) });
+    }
+
     if (account.status !== 'active') {
-      addLog(`⛔ Account ${index} is ${account.status}`);
+      addLog(`⛔ Account ${index} (${account.name}) is ${account.status} - skipping`);
       return;
     }
 
@@ -124,28 +137,28 @@ async function runAccountByIndex(index) {
     await page.waitForTimeout(8000);
 
     await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: "networkidle", timeout: 60000 });
-    await page.waitForTimeout(10000);   // Increased slightly for dynamic content
+    await page.waitForTimeout(10000);
 
-    // Take initial screenshot for debugging
+    // Initial screenshot for debugging
     const initialBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
     if (initialBuffer) {
       await uploadScreenshotAndLog(account, initialBuffer, 'initial-load', 'Initial page state');
     }
 
-    // Check for "Just a little longer..." message (Cooldown state)
-    const cooldownText = await page.locator('text=Just a little longer').isVisible({ timeout: 3000 }).catch(() => false);
+    // Check for cooldown screen
+    const cooldownText = await page.locator('text=Just a little longer').isVisible({ timeout: 5000 }).catch(() => false);
 
     if (cooldownText) {
-      addLog(`⏳ Cooldown detected for ${account.name} (Coming soon screen)`);
+      addLog(`⏳ Cooldown detected for ${account.name}`);
       const cooldownBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
       if (cooldownBuffer) {
-        await uploadScreenshotAndLog(account, cooldownBuffer, 'cooldown', 'Cooldown - Just a little longer screen');
+        await uploadScreenshotAndLog(account, cooldownBuffer, 'cooldown', 'Just a little longer screen');
       }
       await AccountSession.findOneAndUpdate({ index: Number(index) }, { lastClaimed: new Date() });
       return;
     }
 
-    // Check for claim button
+    // Check claim button
     const claimBtn = page.locator('div[class*="claimButtonText"]');
     const btnCount = await claimBtn.count();
 
@@ -163,7 +176,7 @@ async function runAccountByIndex(index) {
       if (isDisabled) {
         addLog(`⛔ Already claimed: ${account.name}`);
       } else {
-        // BEFORE
+        // BEFORE screenshot
         const beforeBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
         if (beforeBuffer) await uploadScreenshotAndLog(account, beforeBuffer, 'before-claim', 'Before click');
 
@@ -172,7 +185,7 @@ async function runAccountByIndex(index) {
 
         await page.waitForTimeout(8000);
 
-        // AFTER
+        // AFTER screenshot
         const afterBuffer = await page.screenshot({ timeout: 15000 }).catch(() => null);
         if (afterBuffer) await uploadScreenshotAndLog(account, afterBuffer, 'after-claim', 'After click');
 
