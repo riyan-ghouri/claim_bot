@@ -258,6 +258,35 @@ app.get("/gallery", async (req, res) => {
     res.json([]);
   }
 });
+// Delete Image Route
+app.delete("/delete-image/:id", async (req, res) => {
+  try {
+    const debugLog = await DebugLog.findById(req.params.id);
+    if (!debugLog) {
+      return res.status(404).send("Image not found");
+    }
+
+    // Delete from Cloudinary
+    if (debugLog.screenshotUrl) {
+      try {
+        const filename = debugLog.screenshotUrl.split('/').pop();
+        const publicId = `goodwallet/debug/${filename.split('.')[0]}`;
+        await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+        console.log(`✅ Deleted from Cloudinary: ${publicId}`);
+      } catch (cloudErr) {
+        console.error("Cloudinary delete warning:", cloudErr.message);
+      }
+    }
+
+    // Delete from MongoDB
+    await DebugLog.findByIdAndDelete(req.params.id);
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Delete error:", err);
+    res.status(500).send("Server error while deleting image");
+  }
+});
 
 app.post("/run", async (req, res) => {
   const index = req.body.index;
