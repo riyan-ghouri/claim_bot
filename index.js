@@ -37,38 +37,21 @@ const addLog = (message) => {
   if (logs.length > 1000) logs.shift();
 };
 
-// Sleep function to replace removed page.waitForTimeout()
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ====================== CHROMIUM PATH FINDER ======================
 function getChromiumExecutablePath() {
   try {
     const baseDir = '/ms-playwright';
-    
-    if (!fs.existsSync(baseDir)) {
-      console.log('❌ /ms-playwright directory not found');
-      return null;
-    }
+    if (!fs.existsSync(baseDir)) return null;
 
     const items = fs.readdirSync(baseDir);
-    console.log('📂 Folders in /ms-playwright:', items);
-
     const chromiumDir = items.find(dir => dir.includes('chromium') && !dir.includes('headless'));
     
-    if (!chromiumDir) {
-      console.log('❌ No chromium folder found');
-      return null;
-    }
+    if (!chromiumDir) return null;
 
     const fullPath = `${baseDir}/${chromiumDir}/chrome-linux64/chrome`;
-
-    if (fs.existsSync(fullPath)) {
-      console.log(`✅ Chromium binary found at: ${fullPath}`);
-      return fullPath;
-    } else {
-      console.log(`⚠️ Binary not found at: ${fullPath}`);
-      return null;
-    }
+    return fs.existsSync(fullPath) ? fullPath : null;
   } catch (err) {
     console.log(`❌ Error locating Chromium: ${err.message}`);
     return null;
@@ -103,7 +86,7 @@ async function uploadScreenshotAndLog(account, buffer, type, message) {
   }
 }
 
-// ====================== MAIN FUNCTION (Improved with longer waits) ======================
+// ====================== MAIN FUNCTION ======================
 async function runAccountByIndex(index) {
   if (isRunning) return;
 
@@ -133,7 +116,7 @@ async function runAccountByIndex(index) {
 
     const executablePath = getChromiumExecutablePath();
     if (!executablePath) {
-      throw new Error('Chromium binary not found in the Docker image');
+      throw new Error('Chromium binary not found');
     }
 
     browser = await puppeteer.launch({
@@ -147,8 +130,7 @@ async function runAccountByIndex(index) {
         '--single-process',
         '--no-zygote'
       ],
-      timeout: 90000,
-      dumpio: false   // Changed to false to reduce noise
+      timeout: 90000
     });
 
     const page = await browser.newPage();
@@ -156,7 +138,6 @@ async function runAccountByIndex(index) {
 
     addLog(`🚀 Running: ${account.name}`);
 
-    // Inject session
     await page.evaluateOnNewDocument((sessionJson) => {
       localStorage.clear();
       localStorage.setItem('SIGNER_SESSION', sessionJson);
@@ -165,18 +146,15 @@ async function runAccountByIndex(index) {
       localStorage.setItem('defaultLoginMethod', 'google');
     }, account.sessionData);
 
-    // === Increased wait times ===
     await page.goto('https://goodwallet.xyz/en', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await sleep(8000);
 
-    await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: 'networkidle2', timeout: 60000 });
-    await sleep(15000);   // ← Increased significantly (was 8000)
+    await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await sleep(15000);
 
-    // Take initial screenshot
     const initialBuffer = await page.screenshot({ encoding: 'binary' }).catch(() => null);
     if (initialBuffer) await uploadScreenshotAndLog(account, initialBuffer, 'initial-load', 'Initial page state');
 
-    // Check for cooldown
     const cooldown = await page.evaluate(() => document.body.innerText.includes("Just a little longer") || 
                                              document.body.innerText.includes("Coming soon"));
 
@@ -188,21 +166,16 @@ async function runAccountByIndex(index) {
       return;
     }
 
-    // Wait longer for UI to fully load (spinner → button)
-    addLog(`⏳ Waiting extra time for claim button to appear...`);
-    await sleep(12000);   // Extra wait
-
-    // Check if claim button exists
     const btnExists = await page.evaluate(() => {
       return document.querySelectorAll('div[class*="claimButtonText"]').length > 0 ||
-             document.querySelectorAll('button').length > 0;   // fallback
+             document.querySelectorAll('button').length > 0;
     });
 
     if (!btnExists) {
-      addLog(`⚠️ UI missing for ${account.name} - still loading or changed UI`);
+      addLog(`⚠️ UI missing for ${account.name}`);
       const buf = await page.screenshot({ encoding: 'binary' }).catch(() => null);
-      if (buf) await uploadScreenshotAndLog(account, buf, 'ui-missing', 'Claim button not found after long wait');
-      await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: 'UI missing after extended wait' });
+      if (buf) await uploadScreenshotAndLog(account, buf, 'ui-missing', 'Claim button not found');
+      await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: 'UI missing' });
     } else {
       const isDisabled = await page.evaluate(() => !!document.querySelector('span[class*="textDisabled"]'));
 
@@ -213,13 +186,12 @@ async function runAccountByIndex(index) {
         if (before) await uploadScreenshotAndLog(account, before, 'before-claim', 'Before click');
 
         await page.evaluate(() => {
-          const btn = document.querySelector('div[class*="claimButtonText"]') || 
-                      document.querySelector('button');
+          const btn = document.querySelector('div[class*="claimButtonText"]') || document.querySelector('button');
           if (btn) btn.click();
         });
 
         addLog(`💰 Claim button clicked for ${account.name}`);
-        await sleep(10000);   // Increased after click
+        await sleep(10000);
 
         const after = await page.screenshot({ encoding: 'binary' }).catch(() => null);
         if (after) await uploadScreenshotAndLog(account, after, 'after-claim', 'After click');
@@ -240,6 +212,35 @@ async function runAccountByIndex(index) {
   }
 }
 
+// ====================== CLEAR ALL SCREENSHOTS ======================
+app.delete("/clear-all-screenshots", async (req, res) => {
+  try {
+    const allLogs = await DebugLog.find({}, 'screenshotUrl');
+
+    // Delete from Cloudinary
+    for (const log of allLogs) {
+      if (log.screenshotUrl) {
+        try {
+          const filename = log.screenshotUrl.split('/').pop();
+          const publicId = `goodwallet/debug/${filename.split('.')[0]}`;
+          await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+        } catch (e) {
+          console.error("Cloudinary delete warning:", e.message);
+        }
+      }
+    }
+
+    // Delete all records from MongoDB
+    await DebugLog.deleteMany({});
+
+    addLog(`🗑️ All screenshots cleared from Cloudinary and MongoDB`);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Clear all error:", err);
+    res.status(500).send("Server error while clearing screenshots");
+  }
+});
+
 // ====================== ROUTES ======================
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, 'views', 'dashboard.html')));
 
@@ -258,35 +259,6 @@ app.get("/gallery", async (req, res) => {
     res.json([]);
   }
 });
-// Delete Image Route
-app.delete("/delete-image/:id", async (req, res) => {
-  try {
-    const debugLog = await DebugLog.findById(req.params.id);
-    if (!debugLog) {
-      return res.status(404).send("Image not found");
-    }
-
-    // Delete from Cloudinary
-    if (debugLog.screenshotUrl) {
-      try {
-        const filename = debugLog.screenshotUrl.split('/').pop();
-        const publicId = `goodwallet/debug/${filename.split('.')[0]}`;
-        await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
-        console.log(`✅ Deleted from Cloudinary: ${publicId}`);
-      } catch (cloudErr) {
-        console.error("Cloudinary delete warning:", cloudErr.message);
-      }
-    }
-
-    // Delete from MongoDB
-    await DebugLog.findByIdAndDelete(req.params.id);
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error("Delete error:", err);
-    res.status(500).send("Server error while deleting image");
-  }
-});
 
 app.post("/run", async (req, res) => {
   const index = req.body.index;
@@ -295,6 +267,27 @@ app.post("/run", async (req, res) => {
 
   res.send(`<h2>✅ Started index ${index}</h2><a href="/">← Back to Dashboard</a>`);
   runAccountByIndex(index);
+});
+
+app.delete("/delete-image/:id", async (req, res) => {
+  try {
+    const debugLog = await DebugLog.findById(req.params.id);
+    if (!debugLog) return res.status(404).send("Image not found");
+
+    if (debugLog.screenshotUrl) {
+      try {
+        const filename = debugLog.screenshotUrl.split('/').pop();
+        const publicId = `goodwallet/debug/${filename.split('.')[0]}`;
+        await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+      } catch (e) {}
+    }
+
+    await DebugLog.findByIdAndDelete(req.params.id);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Delete error:", err);
+    res.status(500).send("Server error");
+  }
 });
 
 app.listen(PORT, () => {
