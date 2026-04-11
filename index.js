@@ -104,6 +104,7 @@ async function uploadScreenshotAndLog(account, buffer, type, message) {
 }
 
 // ====================== MAIN FUNCTION (Improved with longer waits) ======================
+// ====================== MAIN FUNCTION (Optimized for Render) ======================
 async function runAccountByIndex(index) {
   if (isRunning) return;
 
@@ -148,7 +149,7 @@ async function runAccountByIndex(index) {
         '--no-zygote'
       ],
       timeout: 90000,
-      dumpio: false   // Changed to false to reduce noise
+      dumpio: false
     });
 
     const page = await browser.newPage();
@@ -165,73 +166,121 @@ async function runAccountByIndex(index) {
       localStorage.setItem('defaultLoginMethod', 'google');
     }, account.sessionData);
 
-    // === Increased wait times ===
-    await page.goto('https://goodwallet.xyz/en', { waitUntil: 'domcontentloaded', timeout: 80000 });
-    await sleep(8000);
+    // === OPTIMIZED NAVIGATION ===
+    addLog(`🌐 Navigating directly to claim page for ${account.name}`);
 
-    await page.goto('https://goodwallet.xyz/en/gooddollar', { waitUntil: 'networkidle2', timeout: 80000 });
-    await sleep(15000);   // ← Increased significantly (was 8000)
+    await page.goto('https://goodwallet.xyz/en/gooddollar', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
+    });
 
-    // Take initial screenshot
-    const initialBuffer = await page.screenshot({ encoding: 'binary' }).catch(() => null);
-    if (initialBuffer) await uploadScreenshotAndLog(account, initialBuffer, 'initial-load', 'Initial page state');
+    await sleep(10000); // Initial hydration time
+
+    // Check if redirected away from claim page
+    const currentUrl = page.url();
+    if (!currentUrl.includes('/gooddollar')) {
+      addLog(`🔄 Redirected, forcing claim page again...`);
+      await page.goto('https://goodwallet.xyz/en/gooddollar', {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000
+      });
+      await sleep(8000);
+    }
+
+    // Take initial screenshot (compressed)
+    const initialBuffer = await page.screenshot({ 
+      encoding: 'binary',
+      type: 'jpeg',
+      quality: 65 
+    }).catch(() => null);
+
+    if (initialBuffer) await uploadScreenshotAndLog(account, initialBuffer, 'initial-load', 'After navigation');
 
     // Check for cooldown
-    const cooldown = await page.evaluate(() => document.body.innerText.includes("Just a little longer") || 
-                                             document.body.innerText.includes("Coming soon"));
+    const cooldown = await page.evaluate(() => 
+      document.body.innerText.includes("Just a little longer") || 
+      document.body.innerText.includes("Coming soon")
+    );
 
     if (cooldown) {
       addLog(`⏳ Cooldown detected for ${account.name}`);
-      const buf = await page.screenshot({ encoding: 'binary' }).catch(() => null);
+      const buf = await page.screenshot({ encoding: 'binary', type: 'jpeg', quality: 65 }).catch(() => null);
       if (buf) await uploadScreenshotAndLog(account, buf, 'cooldown', 'Cooldown screen');
       await AccountSession.findOneAndUpdate({ index: Number(index) }, { lastClaimed: new Date() });
       return;
     }
 
-    // Wait longer for UI to fully load (spinner → button)
-    addLog(`⏳ Waiting extra time for claim button to appear...`);
-    await sleep(12000);   // Extra wait
+    // Wait + Retry for claim button
+    addLog(`⏳ Waiting for claim button to appear...`);
+    let btnExists = false;
+    for (let i = 0; i < 3; i++) {   // 3 attempts
+      await sleep(6000);
+      
+      btnExists = await page.evaluate(() => {
+        return document.querySelectorAll('div[class*="claimButtonText"]').length > 0 ||
+               document.querySelectorAll('button').length > 3 ||   // fallback
+               document.querySelector('claim-button') !== null;    // in case they use web component
+      });
 
-    // Check if claim button exists
-    const btnExists = await page.evaluate(() => {
-      return document.querySelectorAll('div[class*="claimButtonText"]').length > 0 ||
-             document.querySelectorAll('button').length > 0;   // fallback
-    });
+      if (btnExists) break;
+      addLog(`🔄 Retry ${i+1}/3 for button detection...`);
+    }
 
     if (!btnExists) {
-      addLog(`⚠️ UI missing for ${account.name} - still loading or changed UI`);
-      const buf = await page.screenshot({ encoding: 'binary' }).catch(() => null);
-      if (buf) await uploadScreenshotAndLog(account, buf, 'ui-missing', 'Claim button not found after long wait');
-      await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: 'UI missing after extended wait' });
+      addLog(`⚠️ UI missing for ${account.name}`);
+      const buf = await page.screenshot({ encoding: 'binary', type: 'jpeg', quality: 65 }).catch(() => null);
+      if (buf) await uploadScreenshotAndLog(account, buf, 'ui-missing', 'Claim button not found after retries');
+      await AccountSession.findOneAndUpdate({ index: Number(index) }, { 
+        status: 'error', 
+        lastError: 'UI missing after retries' 
+      });
     } else {
-      const isDisabled = await page.evaluate(() => !!document.querySelector('span[class*="textDisabled"]'));
+      const isDisabled = await page.evaluate(() => 
+        !!document.querySelector('span[class*="textDisabled"]') ||
+        !!document.querySelector('button:disabled')
+      );
 
       if (isDisabled) {
-        addLog(`⛔ Already claimed: ${account.name}`);
+        addLog(`⛔ Already claimed today: ${account.name}`);
       } else {
-        const before = await page.screenshot({ encoding: 'binary' }).catch(() => null);
-        if (before) await uploadScreenshotAndLog(account, before, 'before-claim', 'Before click');
+        // Before click screenshot
+        const before = await page.screenshot({ 
+          encoding: 'binary', 
+          type: 'jpeg', 
+          quality: 65 
+        }).catch(() => null);
+        if (before) await uploadScreenshotAndLog(account, before, 'before-claim', 'Before clicking claim');
 
+        // Click the button
         await page.evaluate(() => {
           const btn = document.querySelector('div[class*="claimButtonText"]') || 
-                      document.querySelector('button');
+                      document.querySelector('button') ||
+                      document.querySelector('claim-button');
           if (btn) btn.click();
         });
 
         addLog(`💰 Claim button clicked for ${account.name}`);
-        await sleep(10000);   // Increased after click
+        await sleep(12000);   // Wait for transaction / success message
 
-        const after = await page.screenshot({ encoding: 'binary' }).catch(() => null);
-        if (after) await uploadScreenshotAndLog(account, after, 'after-claim', 'After click');
+        // After click screenshot
+        const after = await page.screenshot({ 
+          encoding: 'binary', 
+          type: 'jpeg', 
+          quality: 65 
+        }).catch(() => null);
+        if (after) await uploadScreenshotAndLog(account, after, 'after-claim', 'After claim attempt');
 
-        addLog(`✅ Claim completed for ${account.name}`);
+        addLog(`✅ Claim process completed for ${account.name}`);
         await AccountSession.findOneAndUpdate({ index: Number(index) }, { lastClaimed: new Date() });
       }
     }
 
   } catch (err) {
     addLog(`❌ Error on index ${index}: ${err.message}`);
-    await AccountSession.findOneAndUpdate({ index: Number(index) }, { status: 'error', lastError: err.message });
+    await AccountSession.findOneAndUpdate({ index: Number(index) }, { 
+      status: 'error', 
+      lastError: err.message 
+    });
   } finally {
     if (browser) await browser.close().catch(() => {});
     isRunning = false;
