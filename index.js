@@ -449,12 +449,65 @@ app.get("/run/:index", async (req, res) => {
   runAccountByIndex(index, true); // true = isCronTrigger → send email
 });
 
-// Delete & Clear routes (unchanged)
+// ====================== DELETE & CLEAR ROUTES ======================
+
+// Delete single image
 app.delete("/delete-image/:id", async (req, res) => {
-  /* ... your existing code ... */
+  try {
+    const debugLog = await DebugLog.findById(req.params.id);
+    if (!debugLog) {
+      return res.status(404).send("Image not found");
+    }
+
+    // Delete from Cloudinary
+    if (debugLog.screenshotUrl) {
+      try {
+        const filename = debugLog.screenshotUrl.split('/').pop();
+        const publicId = `goodwallet/debug/${filename.split('.')[0]}`;
+        await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+        console.log(`✅ Deleted from Cloudinary: ${publicId}`);
+      } catch (cloudErr) {
+        console.error("Cloudinary delete warning:", cloudErr.message);
+      }
+    }
+
+    // Delete from MongoDB
+    await DebugLog.findByIdAndDelete(req.params.id);
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Delete error:", err);
+    res.status(500).send("Server error while deleting image");
+  }
 });
+
+// Clear all screenshots
 app.delete("/clear-all-screenshots", async (req, res) => {
-  /* ... your existing code ... */
+  try {
+    const allLogs = await DebugLog.find({}, 'screenshotUrl');
+
+    // Delete from Cloudinary
+    for (const log of allLogs) {
+      if (log.screenshotUrl) {
+        try {
+          const filename = log.screenshotUrl.split('/').pop();
+          const publicId = `goodwallet/debug/${filename.split('.')[0]}`;
+          await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+        } catch (e) {
+          console.error("Cloudinary delete warning:", e.message);
+        }
+      }
+    }
+
+    // Delete all records from MongoDB
+    await DebugLog.deleteMany({});
+
+    addLog(`🗑️ All screenshots cleared from Cloudinary and MongoDB`);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Clear all error:", err);
+    res.status(500).send("Server error while clearing screenshots");
+  }
 });
 
 app.listen(PORT, () => {
