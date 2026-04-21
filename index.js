@@ -64,9 +64,7 @@ function getChromiumExecutablePath() {
 
 // ====================== SEND EMAIL HELPER ======================
 
-
 const fetch = require("node-fetch"); // This now works with v2
-
 
 // ====================== SEND EMAIL HELPER (Fixed for Node 22) ======================
 async function sendClaimReport(account, status, message, screenshots = []) {
@@ -76,26 +74,31 @@ async function sendClaimReport(account, status, message, screenshots = []) {
       subject: `GoodWallet Claim Report - ${account.name || `Index ${account.index}`}`,
       message: message,
       accountName: account.name || `Account ${account.index}`,
-      index: `Index ${account.index || ''}`,
+      index: `Index ${account.index || ""}`,
       todayReceive: "250",
       img1: screenshots[0] || "",
       img2: screenshots[1] || "",
       img3: screenshots[2] || "",
-      apiKey: "RG_23456788ytfdsdfgn"
+      apiKey: "RG_23456788ytfdsdfgn",
     };
 
-    const response = await fetch('https://b3tr-wallet.vercel.app/api/send-mail', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json' 
+    const response = await fetch(
+      "https://b3tr-wallet.vercel.app/api/send-mail",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload)
-    });
+    );
 
     const result = await response.text();
-    
+
     if (response.ok) {
-      addLog(`📧 Email report sent successfully for ${account.name || account.index}`);
+      addLog(
+        `📧 Email report sent successfully for ${account.name || account.index}`,
+      );
     } else {
       addLog(`⚠️ Email API error: ${result}`);
     }
@@ -211,26 +214,26 @@ async function runAccountByIndex(index, isCronTrigger = false) {
 
     const targetUrl = "https://goodwallet.xyz/en/gooddollar";
 
-// 🔁 Force redirect loop until correct page is stable
-for (let i = 0; i < 5; i++) {
-  const currentUrl = page.url();
-  console.log("🌐 Current URL:", currentUrl);
+    // 🔁 Force redirect loop until correct page is stable
+    for (let i = 0; i < 5; i++) {
+      const currentUrl = page.url();
+      console.log("🌐 Current URL:", currentUrl);
 
-  if (!currentUrl.includes("/gooddollar")) {
-    addLog(`⚠️ Redirected to wrong route: ${currentUrl}`);
-    addLog(`🔁 Forcing back to /gooddollar...`);
+      if (!currentUrl.includes("/gooddollar")) {
+        addLog(`⚠️ Redirected to wrong route: ${currentUrl}`);
+        addLog(`🔁 Forcing back to /gooddollar...`);
 
-    await page.goto(targetUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60000,
-    });
+        await page.goto(targetUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 60000,
+        });
 
-    await sleep(5000);
-  } else {
-    addLog(`✅ Correct route reached`);
-    break;
-  }
-}
+        await sleep(5000);
+      } else {
+        addLog(`✅ Correct route reached`);
+        break;
+      }
+    }
 
     // Initial Screenshot
     let buffer = await page
@@ -281,18 +284,18 @@ for (let i = 0; i < 5; i++) {
 
     // Button Detection with Retry
     // 🛡 Final route check before interacting
-const finalUrl = page.url();
-if (!finalUrl.includes("/gooddollar")) {
-  addLog(`🚨 Wrong page before claim: ${finalUrl}`);
-  addLog(`🔁 Redirecting again...`);
+    const finalUrl = page.url();
+    if (!finalUrl.includes("/gooddollar")) {
+      addLog(`🚨 Wrong page before claim: ${finalUrl}`);
+      addLog(`🔁 Redirecting again...`);
 
-  await page.goto("https://goodwallet.xyz/en/gooddollar", {
-    waitUntil: "domcontentloaded",
-    timeout: 60000,
-  });
+      await page.goto("https://goodwallet.xyz/en/gooddollar", {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      });
 
-  await sleep(6000);
-}
+      await sleep(6000);
+    }
     let btnExists = false;
     for (let i = 0; i < 3; i++) {
       await sleep(6000);
@@ -361,12 +364,27 @@ if (!finalUrl.includes("/gooddollar")) {
       if (url) screenshots.push(url);
 
       // Click
-      await page.evaluate(() => {
-        const btn =
-          document.querySelector('div[class*="claimButtonText"]') ||
-          document.querySelector("button");
-        if (btn) btn.click();
+      const clicked = await page.evaluate(() => {
+        // Try to find real clickable button
+        const buttons = Array.from(document.querySelectorAll("button"));
+
+        const claimBtn = buttons.find((btn) =>
+          btn.innerText.toLowerCase().includes("claim"),
+        );
+
+        if (claimBtn) {
+          claimBtn.click();
+          return true;
+        }
+
+        return false;
       });
+
+      if (!clicked) {
+        addLog(`❌ Claim button not found for click`);
+      } else {
+        addLog(`💰 Claim button clicked (verified)`);
+      }
 
       addLog(`💰 Claim button clicked`);
       await sleep(12000);
@@ -484,8 +502,8 @@ app.delete("/delete-image/:id", async (req, res) => {
     // Delete from Cloudinary
     if (debugLog.screenshotUrl) {
       try {
-        const filename = debugLog.screenshotUrl.split('/').pop();
-        const publicId = `goodwallet/debug/${filename.split('.')[0]}`;
+        const filename = debugLog.screenshotUrl.split("/").pop();
+        const publicId = `goodwallet/debug/${filename.split(".")[0]}`;
         await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
         console.log(`✅ Deleted from Cloudinary: ${publicId}`);
       } catch (cloudErr) {
@@ -506,15 +524,17 @@ app.delete("/delete-image/:id", async (req, res) => {
 // Clear all screenshots
 app.delete("/clear-all-screenshots", async (req, res) => {
   try {
-    const allLogs = await DebugLog.find({}, 'screenshotUrl');
+    const allLogs = await DebugLog.find({}, "screenshotUrl");
 
     // Delete from Cloudinary
     for (const log of allLogs) {
       if (log.screenshotUrl) {
         try {
-          const filename = log.screenshotUrl.split('/').pop();
-          const publicId = `goodwallet/debug/${filename.split('.')[0]}`;
-          await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+          const filename = log.screenshotUrl.split("/").pop();
+          const publicId = `goodwallet/debug/${filename.split(".")[0]}`;
+          await cloudinary.uploader.destroy(publicId, {
+            resource_type: "image",
+          });
         } catch (e) {
           console.error("Cloudinary delete warning:", e.message);
         }
