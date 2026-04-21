@@ -63,15 +63,10 @@ function getChromiumExecutablePath() {
 }
 
 // ====================== SEND EMAIL HELPER ======================
-// Remove this line:
-// const fetch = require('node-fetch');
 
-// Add this instead at the top with other requires:
+
 const fetch = require("node-fetch"); // This now works with v2
 
-// ====================== SEND EMAIL HELPER (Improved) ======================
-// REMOVE this line completely:
-// const fetch = require('node-fetch');
 
 // ====================== SEND EMAIL HELPER (Fixed for Node 22) ======================
 async function sendClaimReport(account, status, message, screenshots = []) {
@@ -214,13 +209,28 @@ async function runAccountByIndex(index, isCronTrigger = false) {
     });
     await sleep(10000);
 
-    if (!page.url().includes("/gooddollar")) {
-      await page.goto("https://goodwallet.xyz/en/gooddollar", {
-        waitUntil: "domcontentloaded",
-        timeout: 60000,
-      });
-      await sleep(8000);
-    }
+    const targetUrl = "https://goodwallet.xyz/en/gooddollar";
+
+// 🔁 Force redirect loop until correct page is stable
+for (let i = 0; i < 5; i++) {
+  const currentUrl = page.url();
+  console.log("🌐 Current URL:", currentUrl);
+
+  if (!currentUrl.includes("/gooddollar")) {
+    addLog(`⚠️ Redirected to wrong route: ${currentUrl}`);
+    addLog(`🔁 Forcing back to /gooddollar...`);
+
+    await page.goto(targetUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    await sleep(5000);
+  } else {
+    addLog(`✅ Correct route reached`);
+    break;
+  }
+}
 
     // Initial Screenshot
     let buffer = await page
@@ -270,7 +280,19 @@ async function runAccountByIndex(index, isCronTrigger = false) {
     }
 
     // Button Detection with Retry
-    addLog(`⏳ Waiting for claim button...`);
+    // 🛡 Final route check before interacting
+const finalUrl = page.url();
+if (!finalUrl.includes("/gooddollar")) {
+  addLog(`🚨 Wrong page before claim: ${finalUrl}`);
+  addLog(`🔁 Redirecting again...`);
+
+  await page.goto("https://goodwallet.xyz/en/gooddollar", {
+    waitUntil: "domcontentloaded",
+    timeout: 60000,
+  });
+
+  await sleep(6000);
+}
     let btnExists = false;
     for (let i = 0; i < 3; i++) {
       await sleep(6000);
