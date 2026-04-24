@@ -3,7 +3,6 @@ const AccountSession = require("../models/AccountSession");
 const { addLog, sleep, setLastRunTime } = require("../utils/logger");
 const { getChromiumExecutablePath } = require("../utils/chromium");
 const { uploadScreenshotAndLog } = require("../utils/screenshot");
-const { sendClaimReport } = require("../utils/email");
 
 let isRunning = false;
 
@@ -18,7 +17,6 @@ async function runAccountByIndex(index, isCronTrigger = false) {
   );
 
   let browser;
-  let screenshots = []; // Will store up to 3 image URLs for email
 
   try {
     let account = await AccountSession.findOne({ index: Number(index) });
@@ -89,8 +87,7 @@ async function runAccountByIndex(index, isCronTrigger = false) {
     let buffer = await page
       .screenshot({ encoding: "binary", type: "jpeg", quality: 65 })
       .catch(() => null);
-    let url = await uploadScreenshotAndLog(account, buffer, "initial-load", "After navigation");
-    if (url) screenshots.push(url);
+    await uploadScreenshotAndLog(account, buffer, "initial-load", "After navigation");
 
     // Cooldown Check
     const cooldown = await page.evaluate(
@@ -104,16 +101,12 @@ async function runAccountByIndex(index, isCronTrigger = false) {
       buffer = await page
         .screenshot({ encoding: "binary", type: "jpeg", quality: 65 })
         .catch(() => null);
-      url = await uploadScreenshotAndLog(account, buffer, "cooldown", "Cooldown screen");
-      if (url) screenshots.push(url);
+      await uploadScreenshotAndLog(account, buffer, "cooldown", "Cooldown screen");
 
       await AccountSession.findOneAndUpdate(
         { index: Number(index) },
         { lastClaimed: new Date() },
       );
-
-      if (isCronTrigger)
-        await sendClaimReport(account, "Cooldown", "Account is in cooldown period.", screenshots);
       return;
     }
 
@@ -135,16 +128,12 @@ async function runAccountByIndex(index, isCronTrigger = false) {
       buffer = await page
         .screenshot({ encoding: "binary", type: "jpeg", quality: 65 })
         .catch(() => null);
-      url = await uploadScreenshotAndLog(account, buffer, "ui-missing", "Claim button not found");
-      if (url) screenshots.push(url);
+      await uploadScreenshotAndLog(account, buffer, "ui-missing", "Claim button not found");
 
       await AccountSession.findOneAndUpdate(
         { index: Number(index) },
         { status: "error", lastError: "UI missing" },
       );
-
-      if (isCronTrigger)
-        await sendClaimReport(account, "Error", "Claim button not found after retries.", screenshots);
       return;
     }
 
@@ -156,15 +145,12 @@ async function runAccountByIndex(index, isCronTrigger = false) {
 
     if (isDisabled) {
       addLog(`⛔ Already claimed today`);
-      if (isCronTrigger)
-        await sendClaimReport(account, "Already Claimed", "Daily claim already done.", screenshots);
     } else {
       // Before Claim Screenshot
       buffer = await page
         .screenshot({ encoding: "binary", type: "jpeg", quality: 65 })
         .catch(() => null);
-      url = await uploadScreenshotAndLog(account, buffer, "before-claim", "Before click");
-      if (url) screenshots.push(url);
+      await uploadScreenshotAndLog(account, buffer, "before-claim", "Before click");
 
       // Click
       await page.evaluate(() => {
@@ -181,18 +167,13 @@ async function runAccountByIndex(index, isCronTrigger = false) {
       buffer = await page
         .screenshot({ encoding: "binary", type: "jpeg", quality: 65 })
         .catch(() => null);
-      url = await uploadScreenshotAndLog(account, buffer, "after-claim", "After claim");
-      if (url) screenshots.push(url);
+      await uploadScreenshotAndLog(account, buffer, "after-claim", "After claim");
 
       addLog(`✅ Claim completed`);
       await AccountSession.findOneAndUpdate(
         { index: Number(index) },
         { lastClaimed: new Date() },
       );
-
-      if (isCronTrigger) {
-        await sendClaimReport(account, "Success", "Claim successfully processed.", screenshots);
-      }
     }
   } catch (err) {
     addLog(`❌ Error: ${err.message}`);
@@ -208,23 +189,13 @@ async function runAccountByIndex(index, isCronTrigger = false) {
         const errBuffer = await page
           .screenshot({ encoding: "binary", type: "jpeg", quality: 65 })
           .catch(() => null);
-        const errUrl = await uploadScreenshotAndLog(
+        await uploadScreenshotAndLog(
           { name: `Index-${index}` },
           errBuffer,
           "error",
           err.message,
         );
-        if (errUrl) screenshots.push(errUrl);
       } catch (_) {}
-    }
-
-    if (isCronTrigger) {
-      await sendClaimReport(
-        { name: `Index ${index}`, index },
-        "Error",
-        `Failed: ${err.message}`,
-        screenshots,
-      );
     }
   } finally {
     if (browser) await browser.close().catch(() => {});
